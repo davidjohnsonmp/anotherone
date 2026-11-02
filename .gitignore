@@ -1,0 +1,17 @@
+# build output
+build/
+build-*/
+.tools/
+dist/
+package/
+
+# plugin bundles
+*.component
+*.vst3
+*.app
+
+# macOS and editors
+.DS_Store
+.vscode/
+.idea/
+*.xcodeproj/

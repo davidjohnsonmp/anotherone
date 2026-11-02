@@ -1,0 +1,62 @@
+name: Build macOS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v4
+
+      - name: Configure (also downloads JUCE)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"
+
+      - name: Compile the Audio Unit and standalone app
+        run: cmake --build build --config Release --target interval_AU interval_Standalone -j "$(sysctl -n hw.ncpu)"
+
+      - name: Install and validate with auval
+        run: |
+          COMPONENT="$HOME/Library/Audio/Plug-Ins/Components/Interval.component"
+          BUILT="$(find build -type d -name 'Interval.component' -path '*AU*' | head -1)"
+          if [ "$(cd "$BUILT" && pwd)" != "$COMPONENT" ]; then
+            rm -rf "$COMPONENT"; mkdir -p "$(dirname "$COMPONENT")"; cp -R "$BUILT" "$COMPONENT"
+          fi
+          codesign --force --deep --sign - "$COMPONENT"
+          killall -9 AudioComponentRegistrar || true
+          sleep 2
+          auval -v aufx Hcp1 Hcup | tee auval.log
+          grep -q "AU VALIDATION SUCCEEDED" auval.log
+          echo "auval passed for Interval by hiccup audio" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Package
+        run: |
+          mkdir -p package dist
+          ditto "$HOME/Library/Audio/Plug-Ins/Components/Interval.component" package/Interval.component
+          ditto "$(find build -type d -name 'Interval.app' | head -1)" package/Interval.app
+          codesign --force --deep --sign - package/Interval.app
+          # ditto keeps the bundles' permissions and signatures, which a plain artifact upload would lose
+          ditto -c -k --sequesterRsrc package dist/Interval-macOS.zip
+
+      - name: Publish the download
+        uses: actions/upload-artifact@v4
+        with:
+          name: Interval-macOS
+          path: dist/Interval-macOS.zip
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Keep the auval log if validation failed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: auval-log
+          path: auval.log
+          if-no-files-found: ignore
